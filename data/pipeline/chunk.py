@@ -28,6 +28,10 @@ Writes: chunks/<category>/<name>.json         (schema เดิม — app ฝ�
 - `section`  is the nearest Markdown heading / หมวดที่ N
 - `category` comes from the folder name
 
+ไฟล์ใหม่ใน data/processed/ ที่ยังไม่มี entry ใน data/sources.json จะได้ template
+เปล่าๆ (department/source_url/contact ว่าง) auto-generate ใส่ให้ทุกครั้งที่รัน
+— ไปเติมข้อมูลจริงที่นั่น ไม่ต้องแก้ในไฟล์นี้หรือใน chunks/*.json
+
 Run from the repo root:
 
     python -m data.pipeline.chunk
@@ -71,14 +75,66 @@ CATEGORY_TH = {
 }
 
 
-def load_sources() -> dict:
+DEFAULT_SOURCES_README = (
+    "Human-edited metadata sidecar for nicer citations. pipeline/chunk.py reads the "
+    "'docs' map (keyed by doc_id = file stem) and merges these fields into each "
+    "chunk's metadata. ฝ่าย data เติม title/department/source_url/contact ที่นี่ "
+    "(ไม่ต้องแก้ใน chunks/*.json เพราะถูก generate ทับทุกครั้ง). "
+    "ค่า department บางตัวเป็นการคาดเดา — ตรวจสอบแล้วตั้ง verified=true. "
+    "แถวที่ department/source_url/contact ยังว่างคือของที่ chunk.py เพิ่ง auto-generate "
+    "ให้ (ไฟล์ใหม่ที่ยังไม่มีใครกรอก) — ไปเติมแล้วรัน chunk ใหม่"
+)
+
+
+def load_sources_raw() -> dict:
     """Human-edited metadata sidecar (title/department/source_url/contact)."""
     if not SOURCES_FILE.exists():
-        return {}
-    return json.loads(SOURCES_FILE.read_text(encoding="utf-8")).get("docs", {})
+        return {"_README": DEFAULT_SOURCES_README, "docs": {}}
+    return json.loads(SOURCES_FILE.read_text(encoding="utf-8"))
 
 
-SOURCES = load_sources()
+SOURCES_RAW = load_sources_raw()
+SOURCES: dict = SOURCES_RAW.setdefault("docs", {})
+
+
+def sync_sources(md_files: list[Path]) -> None:
+    """เติม template ใน data/sources.json ให้ทุกไฟล์ใหม่ใน data/processed/ ที่ยังไม่มี entry
+
+    ไม่ทับ/ไม่ลบ entry เดิม — แค่เพิ่มของที่ขาด แล้วเตือนถ้ามี entry ที่ไฟล์หายไปแล้ว
+    (เช่น ไฟล์ถูกลบ/เปลี่ยนชื่อ) ให้คนไปเช็กเอง
+    """
+    current_ids: set[str] = set()
+    added: list[str] = []
+    for md_path in md_files:
+        rel = md_path.relative_to(PROCESSED_DIR)
+        category = rel.parts[0] if len(rel.parts) > 1 else "others"
+        doc_id = md_path.stem.replace(" ", "_")
+        current_ids.add(doc_id)
+        if doc_id not in SOURCES:
+            SOURCES[doc_id] = {
+                "title": md_path.stem.replace("_", " "),
+                "category": category,
+                "department": "",
+                "source_url": "",
+                "contact": "",
+                "verified": False,
+            }
+            added.append(doc_id)
+
+    if added:
+        SOURCES_RAW["docs"] = dict(sorted(SOURCES.items()))
+        SOURCES_FILE.write_text(
+            json.dumps(SOURCES_RAW, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"\n📝 เพิ่ม template ใน data/sources.json ให้ {len(added)} ไฟล์ใหม่ (ไปเติม department/source_url/contact):")
+        for doc_id in added:
+            print(f"   + {doc_id}")
+
+    stale = sorted(set(SOURCES) - current_ids)
+    if stale:
+        print(f"\n⚠️  data/sources.json มี {len(stale)} entry ที่ไม่มีไฟล์ processed แล้ว (ไฟล์ถูกลบ/เปลี่ยนชื่อ?):")
+        for doc_id in stale:
+            print(f"   - {doc_id}")
 
 
 def detect_language(text: str) -> str:
@@ -408,6 +464,8 @@ def main() -> None:
     if not md_files:
         print(f"No Markdown files under {PROCESSED_DIR}/ — run pipeline.normalize first")
         return
+
+    sync_sources(md_files)
 
     total = 0
     for md_path in md_files:
