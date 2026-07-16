@@ -8,25 +8,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import fitz  # PyMuPDF
-
 ROOT = Path(__file__).resolve().parents[2]
 INPUT_DIR = ROOT / "data" / "raw"
-SUPPORTED = {".pdf", ".txt", ".md"}
-TEXT_THRESHOLD = 80  # avg chars/page below this => treat a PDF as scanned
+SUPPORTED = {".pdf", ".docx", ".txt", ".md"}
 
 
 def classify(path: Path) -> dict[str, str]:
     ext = path.suffix.lower()
     if ext in {".txt", ".md"}:
         return {"type": "text", "action": "clean -> .md"}
+    if ext == ".docx":
+        return {"type": "docx", "action": "MarkItDown -> .md"}
     if ext == ".pdf":
-        doc = fitz.open(path)
-        avg = sum(len(p.get_text()) for p in doc) // max(len(doc), 1)
-        doc.close()
-        if avg < TEXT_THRESHOLD:
-            return {"type": "scanned-pdf", "action": "Typhoon OCR -> .md"}
-        return {"type": "text-pdf", "action": "extract -> .md"}
+        return {"type": "pdf", "action": "Typhoon OCR (+fallback text) -> .md"}
     return {"type": "unsupported", "action": "skip"}
 
 
@@ -48,8 +42,8 @@ def main() -> None:
     for file, typ, action in rows:
         print(f"{file.ljust(width)}  {typ.ljust(12)}  {action}")
 
-    need_ocr = sum(1 for r in rows if r[1] == "scanned-pdf")
-    print(f"\nTotal: {len(rows)} files | need OCR (Typhoon): {need_ocr}")
+    need_ocr = sum(1 for r in rows if r[1] == "pdf")
+    print(f"\nTotal: {len(rows)} files | Typhoon OCR (PDF): {need_ocr} | docx/txt/md ไม่ OCR")
 
 
 if __name__ == "__main__":
